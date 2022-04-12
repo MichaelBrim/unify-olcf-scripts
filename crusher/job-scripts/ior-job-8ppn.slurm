@@ -1,7 +1,4 @@
 #! /bin/bash -l
-#BSUB -J ior-unify-gekko
-#BSUB -o ior-unify-gekko.job.o%J
-#BSUB -e ior-unify-gekko.job.e%J
 
 #module load hdf5
 
