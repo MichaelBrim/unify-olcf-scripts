@@ -1,0 +1,16 @@
+packages:
+  bzip2:
+    buildable: False
+    externals:
+    - spec: bzip2@1.0.8
+      prefix: /sw/crusher/spack-envs/base/opt/cray-sles15-zen3/gcc-11.2.0/bzip2-1.0.8-4p4fezveyvorxzc42lkztmspzmfybu3u
+  libfabric:
+    buildable: False
+    externals:
+    - spec: libfabric@1.15.0
+      prefix: /opt/cray/libfabric/1.15.0.0
+  zlib:
+    buildable: False
+    externals:
+    - spec: zlib@1.2.11
+      prefix: /sw/crusher/spack-envs/base/opt/cray-sles15-zen3/gcc-11.2.0/zlib-1.2.11-ekeupmdcqoimgroigtctln7tqkyh6pdm

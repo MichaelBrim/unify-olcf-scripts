@@ -1,0 +1,10 @@
+The source for UnifyFS was cloned from the public repo at
+https://github.com/LLNL/UnifyFS. We used the version of the code obtained by
+`git checkout v1.0d` which uses the 'v1.0d' tag.
+
+The build commands used for UnifyFS are found in the 'unifyfs-build-crusher.sh'
+file. The build assumes the appropriate system modules have been loaded by 
+sourcing the 'crusher/load-modules-gcc11-crusher.sh' file, and the Spack 
+environment for the UnifyFS dependencies (see the 'crusher/spack-env' directory)
+has been previously installed.
+

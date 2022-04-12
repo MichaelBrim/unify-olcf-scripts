@@ -1,0 +1,298 @@
+#! /bin/bash -l
+#BSUB -J unifyfs
+#BSUB -o unifyfs.job.o%J
+#BSUB -e unifyfs.job.e%J
+
+module load hdf5
+
+# set necessary environment
+export MY_SCRATCH_DIR=/gpfs/alpine/csc300/proj-shared/summit
+export UNIFYFS_PROJDIR=/ccs/proj/csc300
+export UNIFYFS_SCRIPTS=/ccs/proj/csc300/scripts/unifyfs/summit/paper_scripts
+
+[[ ! -d $UNIFYFS_SCRIPTS ]] && \
+  { echo "ERROR: scripts directory $UNIFYFS_SCRIPTS is missing"; exit 1; }
+
+version="1.0c/mpi-mount-xl"
+version_str=$(echo $version | sed -e 's|/|_|g')
+
+ior_mode=POSIX
+
+# Use shared file or file-per-process?
+ior_file_mode=shared
+
+basetest=ior-${ior_mode}-${ior_file_mode}
+
+unify_mode=nvm
+
+software=unifyfs-${USER}-summit-perf-${version_str}
+testname=${basetest}-${unify_mode}-write-sync-eval
+
+# LSF job setup (creates job dir and cd's to it)
+source ${UNIFYFS_SCRIPTS}/lsf-common.bash
+# NOTE: current working directory is now $MY_JOBDIR
+
+total_nodes=$MY_JOB_NUM_NODES
+total_cores=42
+unifyfs_cores=6
+
+# UNIFYFS job setup
+#module use /sw/summit/unifyfs/modulefiles
+module use /ccs/proj/csc300/modulefiles
+module load unifyfs/$version
+UNIFYFS_BINDIR=$UNIFYFS_ROOT/bin
+
+# set optional UnifyFS config environ here
+#export UNIFYFS_DAEMONIZE=0 # this is required to run on Summit
+export UNIFYFS_SERVER_CORES=$unifyfs_cores
+
+mkdir unifyfs-share
+export UNIFYFS_SHAREDFS_DIR=$PWD/unifyfs-share
+
+export UNIFYFS_LOG_DIR=$PWD/logs
+export UNIFYFS_LOG_ON_ERROR=1
+export UNIFYFS_LOG_VERBOSITY=0 # initially disable all logging
+#export UNIFYFS_LOG_VERBOSITY=5 # for debugging
+
+KIB=$(( 2 ** 10 ))
+MIB=$(( 2 ** 20 ))
+GIB=$(( 2 ** 30 ))
+
+export UNIFYFS_LOGIO_SHMEM_SIZE=0 # disable shmem for data storage
+export UNIFYFS_LOGIO_SPILL_SIZE=$(( 8 * $GIB ))
+export UNIFYFS_LOGIO_SPILL_DIR=/mnt/bb/$USER
+
+# increase clients per application
+export UNIFYFS_SERVER_MAX_APP_CLIENTS=512
+
+# Application job setup (sets app_exe, app_args, ...)
+app_cores=$(( $total_cores - $unifyfs_cores ))
+app_nodes=$total_nodes
+app_ppn=6
+
+ior_bindir=${UNIFYFS_PROJDIR}/apps/ior/ior-3.3.0+unifyfs/bin/unifyfs-1.0c
+ior_iters=5
+mkdir data
+ior_datadir=$PWD/data
+
+# IOR arguments
+# -a <mode>     : IO mode
+# -b <size>     : block size (i.e., contiguous data size per process)
+# -c            : use collective IO
+# -C            : use rank N+1 to read data written by rank N
+# -F            : use file-per-process
+# -k            : don't remove test file upon program exit
+# -m -i <nfile> : use multiple files for test
+# -o <testfile> : path to test file
+# -r            : do read phase
+# -t <size>     : transfer size (i.e., data size per write/read op)
+# -v -v         : more verbose
+# -v -v -v      : report individual operation timings
+# -w            : do write phase
+# -w -Y         : do write phase, fsync after each write 
+# -w -e         : do write phase, fsync after phase
+ior_base_args="-a $ior_mode -v -v -m -i $ior_iters -w"
+
+ior_unifyfs_exe=$ior_bindir/ior.unifyfs
+ior_unifyfs_out="$testname.unifyfs.out"
+ior_unifyfs_err="$testname.unifyfs.err"
+
+# capture environment after all job setup completed
+env &> job.environ
+
+# Run things
+
+# launch server infrastructure on all nodes (use $unifyfs_cores cores per node)
+echo -n "Launching UNIFYFS server infrastructure @ $(date) : "
+unifyfs_start_args="-c -S ${UNIFYFS_SHAREDFS_DIR}"
+start_cmd="${UNIFYFS_BINDIR}/unifyfs start $unifyfs_start_args"
+echo "$start_cmd" 
+$start_cmd &> unifyfs.start.out
+if [[ $? -ne 0 ]]; then
+    echo "JOB ERROR: failed to start UnifyFS servers, checking nodes"
+    ${UNIFYFS_SCRIPTS}/check_job_nodes.bash -s
+    exit 1
+fi
+
+# show active job steps
+echo "At $(date), listing job steps : "
+jslist
+
+#iterations="1"
+#iterations="1 2"
+iterations="1 2 3"
+
+# IOR write
+for iter in $iterations; do
+for chksz in $(( 4 * $MIB )) $(( 16 * $MIB)); do
+    export UNIFYFS_LOGIO_CHUNK_SIZE=$chksz
+    ior_chunksz=$chksz
+    ior_blocksz=$(( 64 * $ior_chunksz )) # 1 block == 64 chunks
+    ior_segments=$(( $GIB / $ior_blocksz ))
+    ior_args="$ior_base_args -s $ior_segments -b $ior_blocksz -t $ior_chunksz"
+
+    # Write, no fsync, WRITE_SYNC=0 (FSYNC_PERSIST not relevant)
+    run_args="$ior_args"
+    run_tag="write.fsync=0.write_sync=0.$chksz.$iter"
+    export UNIFYFS_CLIENT_WRITE_SYNC=0
+    export UNIFYFS_CLIENT_FSYNC_PERSIST=0
+    echo
+    echo -n "Launching IOR ($run_tag) on UnifyFS @ $(date) : "
+    jsargs="-d packed --nrs $app_nodes -r 1 -c $app_cores"
+    [[ -n $app_ppn ]] && jsargs="$jsargs -a $app_ppn"
+    [[ -n $ior_unifyfs_out ]] && jsargs="$jsargs -o $ior_unifyfs_out.$run_tag"
+    [[ -n $ior_unifyfs_err ]] && jsargs="$jsargs -k $ior_unifyfs_err.$run_tag"
+    ior_outfile="/unifyfs/ior.$run_tag"
+    echo "jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+
+    # Write, no fsync, WRITE_SYNC=1 (FSYNC_PERSIST not relevant)
+    run_args="$ior_args"
+    run_tag="write.fsync=0.write_sync=1.$chksz.$iter"
+    export UNIFYFS_CLIENT_WRITE_SYNC=1
+    export UNIFYFS_CLIENT_FSYNC_PERSIST=0
+    echo
+    echo -n "Launching IOR ($run_tag) on UnifyFS @ $(date) : "
+    jsargs="-d packed --nrs $app_nodes -r 1 -c $app_cores"
+    [[ -n $app_ppn ]] && jsargs="$jsargs -a $app_ppn"
+    [[ -n $ior_unifyfs_out ]] && jsargs="$jsargs -o $ior_unifyfs_out.$run_tag"
+    [[ -n $ior_unifyfs_err ]] && jsargs="$jsargs -k $ior_unifyfs_err.$run_tag"
+    ior_outfile="/unifyfs/ior.$run_tag"
+    echo "jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+
+    # Write, with phase fsync, WRITE_SYNC=0, FSYNC_PERSIST=0
+    run_args="$ior_args -e"
+    run_tag="write.fsync=1.write_sync=0.persist=0.$chksz.$iter"
+    export UNIFYFS_CLIENT_WRITE_SYNC=0
+    export UNIFYFS_CLIENT_FSYNC_PERSIST=0
+    echo
+    echo -n "Launching IOR ($run_tag) on UnifyFS @ $(date) : "
+    jsargs="-d packed --nrs $app_nodes -r 1 -c $app_cores"
+    [[ -n $app_ppn ]] && jsargs="$jsargs -a $app_ppn"
+    [[ -n $ior_unifyfs_out ]] && jsargs="$jsargs -o $ior_unifyfs_out.$run_tag"
+    [[ -n $ior_unifyfs_err ]] && jsargs="$jsargs -k $ior_unifyfs_err.$run_tag"
+    ior_outfile="/unifyfs/ior.$run_tag"
+    echo "jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+
+    # Write, with phase fsync, WRITE_SYNC=0, FSYNC_PERSIST=1
+    run_args="$ior_args -e"
+    run_tag="write.fsync=1.write_sync=0.persist=1.$chksz.$iter"
+    export UNIFYFS_CLIENT_WRITE_SYNC=0
+    export UNIFYFS_CLIENT_FSYNC_PERSIST=1
+    echo
+    echo -n "Launching IOR ($run_tag) on UnifyFS @ $(date) : "
+    jsargs="-d packed --nrs $app_nodes -r 1 -c $app_cores"
+    [[ -n $app_ppn ]] && jsargs="$jsargs -a $app_ppn"
+    [[ -n $ior_unifyfs_out ]] && jsargs="$jsargs -o $ior_unifyfs_out.$run_tag"
+    [[ -n $ior_unifyfs_err ]] && jsargs="$jsargs -k $ior_unifyfs_err.$run_tag"
+    ior_outfile="/unifyfs/ior.$run_tag"
+    echo "jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+
+    # Write, with phase fsync, WRITE_SYNC=1, FSYNC_PERSIST=0
+    run_args="$ior_args -e"
+    run_tag="write.fsync=1.write_sync=1.persist=0.$chksz.$iter"
+    export UNIFYFS_CLIENT_WRITE_SYNC=1
+    export UNIFYFS_CLIENT_FSYNC_PERSIST=0
+    echo
+    echo -n "Launching IOR ($run_tag) on UnifyFS @ $(date) : "
+    jsargs="-d packed --nrs $app_nodes -r 1 -c $app_cores"
+    [[ -n $app_ppn ]] && jsargs="$jsargs -a $app_ppn"
+    [[ -n $ior_unifyfs_out ]] && jsargs="$jsargs -o $ior_unifyfs_out.$run_tag"
+    [[ -n $ior_unifyfs_err ]] && jsargs="$jsargs -k $ior_unifyfs_err.$run_tag"
+    ior_outfile="/unifyfs/ior.$run_tag"
+    echo "jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+
+    # Write, with phase fsync, WRITE_SYNC=1, FSYNC_PERSIST=1
+    run_args="$ior_args -e"
+    run_tag="write.fsync=1.write_sync=1.persist=1.$chksz.$iter"
+    export UNIFYFS_CLIENT_WRITE_SYNC=1
+    export UNIFYFS_CLIENT_FSYNC_PERSIST=1
+    echo
+    echo -n "Launching IOR ($run_tag) on UnifyFS @ $(date) : "
+    jsargs="-d packed --nrs $app_nodes -r 1 -c $app_cores"
+    [[ -n $app_ppn ]] && jsargs="$jsargs -a $app_ppn"
+    [[ -n $ior_unifyfs_out ]] && jsargs="$jsargs -o $ior_unifyfs_out.$run_tag"
+    [[ -n $ior_unifyfs_err ]] && jsargs="$jsargs -k $ior_unifyfs_err.$run_tag"
+    ior_outfile="/unifyfs/ior.$run_tag"
+    echo "jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+
+    # Write, with per-write fsync, FSYNC_PERSIST=0 (WRITE_SYNC not relevant)
+    run_args="$ior_args -Y"
+    run_tag="write.fsync=2.persist=0.$chksz.$iter"
+    export UNIFYFS_CLIENT_WRITE_SYNC=0
+    export UNIFYFS_CLIENT_FSYNC_PERSIST=0
+    echo
+    echo -n "Launching IOR ($run_tag) on UnifyFS @ $(date) : "
+    jsargs="-d packed --nrs $app_nodes -r 1 -c $app_cores"
+    [[ -n $app_ppn ]] && jsargs="$jsargs -a $app_ppn"
+    [[ -n $ior_unifyfs_out ]] && jsargs="$jsargs -o $ior_unifyfs_out.$run_tag"
+    [[ -n $ior_unifyfs_err ]] && jsargs="$jsargs -k $ior_unifyfs_err.$run_tag"
+    ior_outfile="/unifyfs/ior.$run_tag"
+    echo "jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+
+    # Write, with per-write fsync, FSYNC_PERSIST=1 (WRITE_SYNC not relevant)
+    run_args="$ior_args -Y"
+    run_tag="write.fsync=2.persist=1.$chksz.$iter"
+    export UNIFYFS_CLIENT_WRITE_SYNC=0
+    export UNIFYFS_CLIENT_FSYNC_PERSIST=1
+    echo
+    echo -n "Launching IOR ($run_tag) on UnifyFS @ $(date) : "
+    jsargs="-d packed --nrs $app_nodes -r 1 -c $app_cores"
+    [[ -n $app_ppn ]] && jsargs="$jsargs -a $app_ppn"
+    [[ -n $ior_unifyfs_out ]] && jsargs="$jsargs -o $ior_unifyfs_out.$run_tag"
+    [[ -n $ior_unifyfs_err ]] && jsargs="$jsargs -k $ior_unifyfs_err.$run_tag"
+    ior_outfile="/unifyfs/ior.$run_tag"
+    echo "jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $run_args -o $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+done
+done
+
+# cleanup
+echo
+echo -n "Cleaning up @ $(date) : "
+unifyfs_term_args=""
+stop_cmd="${UNIFYFS_BINDIR}/unifyfs terminate $unifyfs_term_args"
+echo "$stop_cmd"
+$stop_cmd &> unifyfs.terminate.out
+sleep 5 
+
+# show active job steps
+echo
+echo "At $(date), listing job steps : "
+jslist
+
+# cleanup state on nodes
+${UNIFYFS_SCRIPTS}/clean_job_nodes.bash
+
+echo "All done @ $(date)"
+

@@ -1,0 +1,40 @@
+diff --git a/external/hermes b/external/hermes
+--- a/external/hermes
++++ b/external/hermes
+@@ -1 +1 @@
+-Subproject commit 38d821182ef2b6c6961595bf011ca69bf78bc936
++Subproject commit 38d821182ef2b6c6961595bf011ca69bf78bc936-dirty
+diff --git a/src/client/preload_util.cpp b/src/client/preload_util.cpp
+index 595dcae6..18a9fdf2 100644
+--- a/src/client/preload_util.cpp
++++ b/src/client/preload_util.cpp
+@@ -107,6 +107,8 @@ extract_protocol(const string& uri) {
+ 
+     if(uri.find(gkfs::rpc::protocol::ofi_sockets) != string::npos) {
+         protocol = gkfs::rpc::protocol::ofi_sockets;
++    } else if(uri.find(gkfs::rpc::protocol::ofi_tcp) != string::npos) {
++        protocol = gkfs::rpc::protocol::ofi_tcp;
+     } else if(uri.find(gkfs::rpc::protocol::ofi_psm2) != string::npos) {
+         protocol = gkfs::rpc::protocol::ofi_psm2;
+     } else if(uri.find(gkfs::rpc::protocol::ofi_verbs) != string::npos) {
+diff --git a/src/daemon/daemon.cpp b/src/daemon/daemon.cpp
+index d58c3106..a5cfca3b 100644
+--- a/src/daemon/daemon.cpp
++++ b/src/daemon/daemon.cpp
+@@ -475,6 +475,7 @@ parse_input(const cli_options& opts, const CLI::App& desc) {
+         rpc_protocol = opts.rpc_protocol;
+         if(rpc_protocol != gkfs::rpc::protocol::ofi_verbs &&
+            rpc_protocol != gkfs::rpc::protocol::ofi_sockets &&
++           rpc_protocol != gkfs::rpc::protocol::ofi_tcp &&
+            rpc_protocol != gkfs::rpc::protocol::ofi_psm2) {
+             throw runtime_error(fmt::format(
+                     "Given RPC protocol '{}' not supported. Check --help for supported protocols.",
+@@ -634,7 +635,7 @@ main(int argc, const char* argv[]) {
+     desc.add_option(
+                     "--rpc-protocol,-P", opts.rpc_protocol,
+                     "Used RPC protocol for inter-node communication.\n"
+-                    "Available: {ofi+sockets, ofi+verbs, ofi+psm2} for TCP, Infiniband, "
++                    "Available: {ofi+sockets | ofi+tcp, ofi+verbs, ofi+psm2} for TCP, Infiniband, "
+                     "and Omni-Path, respectively. (Default ofi+sockets)\n"
+                     "Libfabric must have enabled support verbs or psm2.");
+     desc.add_flag(

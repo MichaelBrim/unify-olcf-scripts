@@ -1,0 +1,48 @@
+packages:
+  autoconf:
+    buildable: False
+    externals:
+    - spec: autoconf@2.69
+      prefix: /sw/crusher/spack-envs/base/opt/linux-sles15-x86_64/gcc-7.5.0/autoconf-2.69-xxyoerosvrllj5e3nqjokrufgfhhhtwm
+  automake:
+    buildable: False
+    externals:
+    - spec: automake@1.16.3
+      prefix: /sw/crusher/spack-envs/base/opt/linux-sles15-x86_64/gcc-7.5.0/automake-1.16.3-dcvcqi4krg7edqtvc2wta755duutftpl
+  bison:
+    buildable: False
+    externals:
+    - spec: bison@3.0.4
+      prefix: /usr
+  cmake:
+    buildable: False
+    externals:
+    - spec: cmake@3.21.3
+      prefix: /sw/crusher/spack-envs/base/opt/linux-sles15-x86_64/gcc-7.5.0/cmake-3.21.3-rsmsjp6nq5d3ah55w4wrzjjcqgdzqmed
+  libtool:
+    buildable: False
+    externals:
+    - spec: libtool@2.4.6
+      prefix: /sw/crusher/spack-envs/base/opt/linux-sles15-x86_64/gcc-7.5.0/libtool-2.4.6-zziemu3pzoz6aev5j5sonkyzc23biia2
+  m4:
+    buildable: False
+    externals:
+    - spec: m4@1.4.18
+      prefix: /usr
+  mpi:
+    buildable: False
+  openssl:
+    buildable: False
+    externals:
+    - spec: openssl@1.1.1d
+      prefix: /usr
+  pkg-config:
+    buildable: False
+    externals:
+    - spec: pkg-config@0.29.2
+      prefix: /usr
+  python:
+    buildable: False
+    externals:
+    - spec: python@3.9.4
+      prefix: /opt/cray/pe/python/3.9.4.2

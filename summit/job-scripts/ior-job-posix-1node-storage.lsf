@@ -1,0 +1,305 @@
+#! /bin/bash -l
+#BSUB -J unifyfs
+#BSUB -o unifyfs.job.o%J
+#BSUB -e unifyfs.job.e%J
+
+module load hdf5
+
+# set necessary environment
+export MY_SCRATCH_DIR=/gpfs/alpine/csc300/proj-shared/summit
+export UNIFYFS_PROJDIR=/ccs/proj/csc300
+export UNIFYFS_SCRIPTS=/ccs/proj/csc300/scripts/unifyfs/summit/paper_scripts
+
+[[ ! -d $UNIFYFS_SCRIPTS ]] && \
+  { echo "ERROR: scripts directory $UNIFYFS_SCRIPTS is missing"; exit 1; }
+
+version="1.0c/mpi-mount-xl"
+version_str=$(echo $version | sed -e 's|/|_|g')
+
+ior_mode=POSIX
+
+# Use shared file or file-per-process?
+ior_file_mode=shared
+
+basetest=ior-${ior_mode}-${ior_file_mode}
+
+unify_mode="storage_eval"
+
+software=unifyfs-${USER}-summit-perf-${version_str}
+testname=${basetest}-${unify_mode}
+
+# LSF job setup (creates job dir and cd's to it)
+source ${UNIFYFS_SCRIPTS}/lsf-common.bash
+# NOTE: current working directory is now $MY_JOBDIR
+
+total_nodes=$MY_JOB_NUM_NODES
+total_cores=42
+unifyfs_cores=6
+
+# UNIFYFS job setup
+#module use /sw/summit/unifyfs/modulefiles
+module use /ccs/proj/csc300/modulefiles
+module load unifyfs/$version
+UNIFYFS_BINDIR=$UNIFYFS_ROOT/bin
+
+# set optional UnifyFS config environ here
+#export UNIFYFS_DAEMONIZE=0 # this is required to run on Summit
+export UNIFYFS_SERVER_CORES=$unifyfs_cores
+
+mkdir unifyfs-share
+export UNIFYFS_SHAREDFS_DIR=$PWD/unifyfs-share
+
+export UNIFYFS_LOG_DIR=$PWD/logs
+export UNIFYFS_LOG_ON_ERROR=1
+export UNIFYFS_LOG_VERBOSITY=0 # initially disable all logging
+#export UNIFYFS_LOG_VERBOSITY=5 # for debugging
+
+KIB=$(( 2 ** 10 ))
+MIB=$(( 2 ** 20 ))
+GIB=$(( 2 ** 30 ))
+
+nvm_dir=/mnt/bb/$USER
+export UNIFYFS_LOGIO_SPILL_DIR=$nvm_dir
+
+# Application job setup (sets app_exe, app_args, ...)
+app_cores=$(( $total_cores - $unifyfs_cores ))
+app_nodes=$total_nodes
+#app_ppn=1
+app_ppn=6
+#app_ppn=36
+
+ior_bindir=${UNIFYFS_PROJDIR}/apps/ior/ior-3.3.0+unifyfs/bin/unifyfs-1.0c
+ior_iters=5
+
+
+ior_gpfs_exe=$ior_bindir/ior.gpfs
+ior_unifyfs_exe=$ior_bindir/ior.unifyfs
+
+ior_tmpfs_out="$testname.tmpfs.out"
+ior_tmpfs_err="$testname.tmpfs.err"
+
+ior_xfs_out="$testname.nvm-xfs.out"
+ior_xfs_err="$testname.nvm-xfs.err"
+
+ior_unifyfs_shm_out="$testname.unifyfs-shm.out"
+ior_unifyfs_shm_err="$testname.unifyfs-shm.err"
+
+ior_unifyfs_span_out="$testname.unifyfs-span.out"
+ior_unifyfs_span_err="$testname.unifyfs-span.err"
+
+ior_unifyfs_nvm_out="$testname.unifyfs-nvm.out"
+ior_unifyfs_nvm_err="$testname.unifyfs-nvm.err"
+
+# capture environment after all job setup completed
+env &> job.environ
+
+# Run things
+
+export UNIFYFS_SERVER_MAX_APP_CLIENTS=$(( $app_ppn * 200 ))
+
+# launch server infrastructure on all nodes (use $unifyfs_cores cores per node)
+echo -n "Launching UNIFYFS server infrastructure @ $(date) : "
+unifyfs_start_args="-c -S ${UNIFYFS_SHAREDFS_DIR}"
+start_cmd="${UNIFYFS_BINDIR}/unifyfs start $unifyfs_start_args"
+echo "$start_cmd" 
+$start_cmd &> unifyfs.start.out
+if [[ $? -ne 0 ]]; then
+    echo "JOB ERROR: failed to start UnifyFS servers, checking nodes"
+    ${UNIFYFS_SCRIPTS}/check_job_nodes.bash -s
+    exit 1
+fi
+
+# show active job steps
+echo "At $(date), listing job steps : "
+jslist
+
+iterations="1"
+#iterations="1 2 3"
+chunk_sizes="$(( 64 * $KIB)) $(( 512 * $KIB)) $MIB $(( 4 * $MIB )) $(( 8 * $MIB )) $(( 16 * $MIB ))"
+for iter in $iterations; do
+for chksz in $chunk_sizes; do
+    ior_chunksz=$chksz
+    ior_blocksz=$GIB
+
+    export UNIFYFS_LOGIO_CHUNK_SIZE=$chksz
+
+    # IOR arguments
+    # -a <mode>     : IO mode
+    # -v -v         : individual repetition performance results
+    # -v -v -v      : all test operation times
+    # -m -i <nfile> : multi-file
+    # -e -w         : do write phase, fsync after phase
+    # -t <size>     : transfer size (i.e., data size per write/read op)
+    # -b <size>     : block size (i.e., contiguous data size per process)
+    ior_args="-a $ior_mode -v -v -v -m -i $ior_iters -e -w -t $ior_chunksz -b $ior_blocksz"
+
+    # TMPFS
+#    ior_outfile="-o /tmp/ior.tmpfs.$chksz.$iter"
+#    echo
+#    echo -n "Launching IOR on tmpfs @ $(date) : "
+#   jsargs="--nrs $app_nodes -r 1 -c $app_cores"
+#   jsargs="$jsargs -a $app_ppn"
+#   jsargs="$jsargs -o $ior_tmpfs_out.$iter.$chksz"
+#   jsargs="$jsargs -k $ior_tmpfs_err.$iter.$chksz"
+#   echo "jsrun $jsargs $ior_gpfs_exe $ior_args $ior_outfile"
+#   jsrun $jsargs $ior_gpfs_exe $ior_args $ior_outfile
+#   echo "At $(date), listing job steps : "
+#   jslist
+#   echo
+#   sleep 5
+
+    # NVM XFS
+#   ior_outfile="-o $nvm_dir/ior.nvm-xfs.$chksz.$iter"
+#   echo
+#   echo -n "Launching IOR on NVM xfs @ $(date) : "
+#   jsargs="--nrs $app_nodes -r 1 -c $app_cores"
+#   jsargs="$jsargs -a $app_ppn"
+#   jsargs="$jsargs -o $ior_xfs_out.$iter.$chksz"
+#   jsargs="$jsargs -k $ior_xfs_err.$iter.$chksz"
+#   echo "jsrun $jsargs $ior_gpfs_exe $ior_args $ior_outfile"
+#   jsrun $jsargs $ior_gpfs_exe $ior_args $ior_outfile
+#   echo "At $(date), listing job steps : "
+#   jslist
+#   echo
+#   sleep 5
+
+    # UnifyFS: all SHMEM
+    ior_outfile="-o /unifyfs/ior.unify-shmem.$chksz.$iter"
+    export UNIFYFS_LOGIO_SHMEM_SIZE=$(( $GIB + $MIB ))
+    export UNIFYFS_LOGIO_SPILL_SIZE=0
+    echo
+    echo -n "Launching IOR on UnifyFS (all SHMEM) @ $(date) : "
+    jsargs="--nrs $app_nodes -r 1 -c $app_cores"
+    jsargs="$jsargs -a $app_ppn"
+    jsargs="$jsargs -o $ior_unifyfs_shm_out.$iter.$chksz"
+    jsargs="$jsargs -k $ior_unifyfs_shm_err.$iter.$chksz"
+    echo "jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+    sleep 5
+
+    # UnifyFS: span SHMEM and NVM 75/25
+#   ior_outfile="-o /unifyfs/ior.unify-span.75-25.$chksz.$iter"
+#   export UNIYFS_LOGIO_SHMEM_SIZE=$(( 769 * $MIB ))
+#   export UNIYFS_LOGIO_SPILL_SIZE=$(( 257 * $MIB ))
+#   echo
+#   echo -n "Launching IOR on UnifyFS (SHMEM + NVM) @ $(date) : "
+#   jsargs="--nrs $app_nodes -r 1 -c $app_cores"
+#   jsargs="$jsargs -a $app_ppn"
+#   jsargs="$jsargs -o $ior_unifyfs_span_out.$iter.75-25.$chksz"
+#   jsargs="$jsargs -k $ior_unifyfs_span_err.$iter.75-25.$chksz"
+#   echo "jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile"
+#   jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile
+#   echo "At $(date), listing job steps : "
+#   jslist
+#   echo
+#   sleep 5
+
+    # UnifyFS: span SHMEM and NVM 50/50
+    ior_outfile="-o /unifyfs/ior.unify-span.50-50.$chksz.$iter"
+    export UNIYFS_LOGIO_SHMEM_SIZE=$(( 513 * $MIB ))
+    export UNIYFS_LOGIO_SPILL_SIZE=$(( 513 * $MIB ))
+    echo
+    echo -n "Launching IOR on UnifyFS (SHMEM + NVM) @ $(date) : "
+    jsargs="--nrs $app_nodes -r 1 -c $app_cores"
+    jsargs="$jsargs -a $app_ppn"
+    jsargs="$jsargs -o $ior_unifyfs_span_out.$iter.50-50.$chksz"
+    jsargs="$jsargs -k $ior_unifyfs_span_err.$iter.50-50.$chksz"
+    echo "jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+    sleep 5
+
+    # UnifyFS: span SHMEM and NVM 25/75
+    ior_outfile="-o /unifyfs/ior.unify-span.25-75.$chksz.$iter"
+    export UNIYFS_LOGIO_SHMEM_SIZE=$(( 257 * $MIB ))
+    export UNIYFS_LOGIO_SPILL_SIZE=$(( 769 * $MIB ))
+    echo
+    echo -n "Launching IOR on UnifyFS (SHMEM + NVM) @ $(date) : "
+    jsargs="--nrs $app_nodes -r 1 -c $app_cores"
+    jsargs="$jsargs -a $app_ppn"
+    jsargs="$jsargs -o $ior_unifyfs_span_out.$iter.25-75.$chksz"
+    jsargs="$jsargs -k $ior_unifyfs_span_err.$iter.25-75.$chksz"
+    echo "jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+    sleep 5
+
+    # UnifyFS: span SHMEM and NVM 10/90
+    ior_outfile="-o /unifyfs/ior.unify-span.10-90.$chksz.$iter"
+    export UNIYFS_LOGIO_SHMEM_SIZE=$(( 113 * $MIB ))
+    export UNIYFS_LOGIO_SPILL_SIZE=$(( 913 * $MIB ))
+    echo
+    echo -n "Launching IOR on UnifyFS (SHMEM + NVM) @ $(date) : "
+    jsargs="--nrs $app_nodes -r 1 -c $app_cores"
+    jsargs="$jsargs -a $app_ppn"
+    jsargs="$jsargs -o $ior_unifyfs_span_out.$iter.10-90.$chksz"
+    jsargs="$jsargs -k $ior_unifyfs_span_err.$iter.10-90.$chksz"
+    echo "jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+    sleep 5
+
+    # UnifyFS: span SHMEM and NVM 5/95
+    ior_outfile="-o /unifyfs/ior.unify-span.05-95.$chksz.$iter"
+    export UNIYFS_LOGIO_SHMEM_SIZE=$(( 49 * $MIB ))
+    export UNIYFS_LOGIO_SPILL_SIZE=$(( 977 * $MIB ))
+    echo
+    echo -n "Launching IOR on UnifyFS (SHMEM + NVM) @ $(date) : "
+    jsargs="--nrs $app_nodes -r 1 -c $app_cores"
+    jsargs="$jsargs -a $app_ppn"
+    jsargs="$jsargs -o $ior_unifyfs_span_out.$iter.05-95.$chksz"
+    jsargs="$jsargs -k $ior_unifyfs_span_err.$iter.05-95.$chksz"
+    echo "jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+    sleep 5
+
+    # UnifyFS: all NVM
+    ior_outfile="-o /unifyfs/ior.unify-nvm.$chksz.$iter"
+    export UNIFYFS_LOGIO_SHMEM_SIZE=0
+    export UNIFYFS_LOGIO_SPILL_SIZE=$(( $GIB + $MIB ))
+    echo
+    echo -n "Launching IOR on UnifyFS (all NVM) @ $(date) : "
+    jsargs="--nrs $app_nodes -r 1 -c $app_cores"
+    jsargs="$jsargs -a $app_ppn"
+    jsargs="$jsargs -o $ior_unifyfs_nvm_out.$iter.$chksz"
+    jsargs="$jsargs -k $ior_unifyfs_nvm_err.$iter.$chksz"
+    echo "jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile"
+    jsrun $jsargs $ior_unifyfs_exe $ior_args $ior_outfile
+    echo "At $(date), listing job steps : "
+    jslist
+    echo
+    sleep 5
+done # for chksz
+done # for iter
+
+# cleanup
+echo
+echo -n "Cleaning up @ $(date) : "
+unifyfs_term_args=""
+stop_cmd="${UNIFYFS_BINDIR}/unifyfs terminate $unifyfs_term_args"
+echo "$stop_cmd"
+$stop_cmd &> unifyfs.terminate.out
+sleep 5 
+
+# show active job steps
+echo
+echo "At $(date), listing job steps : "
+jslist
+
+# cleanup state on nodes
+${UNIFYFS_SCRIPTS}/clean_job_nodes.bash
+
+echo "All done @ $(date)"
+

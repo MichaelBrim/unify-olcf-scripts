@@ -1,0 +1,40 @@
+compilers:
+- compiler:
+    spec: gcc@8.3.1
+    paths:
+      cc: /usr/bin/gcc
+      cxx: /usr/bin/g++
+      f77: /usr/bin/gfortran
+      fc: /usr/bin/gfortran
+    flags: {}
+    operating_system: rhel8
+    target: ppc64le
+    modules: []
+    environment: {}
+    extra_rpaths: []
+packages:
+  cmake:
+    buildable: False
+    externals:
+    - spec: cmake@3.20.2
+      prefix: /sw/summit/spack-envs/base/opt/linux-rhel8-ppc64le/gcc-8.3.1/cmake-3.20.2-5h4momgjnhes6fukxf3476n7qgkazefi
+  json-c:
+    buildable: False
+    externals:
+    - spec: json-c@0.15
+      prefix: /sw/summit/spack-envs/base/opt/linux-rhel8-ppc64le/gcc-8.3.1/json-c-0.15-fhr4bgb377de5tqb6tsamftgt5gtttv2
+  mercury:
+    buildable: False
+    externals:
+    - spec: mercury@2.0.1
+      prefix: /sw/summit/spack-envs/base/opt/linux-rhel8-ppc64le/gcc-8.3.1/mercury-2.0.1-wlb2w7gbpkbu25hnqd7u67wavlgi7pjm 
+  spath:
+    buildable: False
+    externals:
+    - spec: spath@0.0.2 ~mpi
+      prefix: /sw/summit/spack-envs/base/opt/linux-rhel8-ppc64le/gcc-8.3.1/spath-0.0.2-mmhgwwzwquterqzf2n66ihyb475nxgmo
+  zlib:
+    buildable: False
+    externals:
+    - spec: zlib@1.2.11
+      prefix: /sw/summit/spack-envs/base/opt/linux-rhel8-ppc64le/gcc-8.3.1/zlib-1.2.11-ftuul4p4uvob246pxgk3hvfgqskovhoo

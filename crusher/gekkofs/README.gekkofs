@@ -1,0 +1,29 @@
+The GekkoFS source code was cloned from the public repo at
+https://storage.bsc.es/gitlab/hpc/gekkofs.git
+
+The HEAD corresponded to this commit:
+---
+commit d5471fa52e3fe5762e89c07a95e8659775c9d4a1 (HEAD -> master, origin/master, origin/HEAD)
+Merge: 91f1597c d4d2185f
+Author: Ramon Nou <ramon.nou@bsc.es>
+Date:   Fri Feb 11 07:22:18 2022 +0000
+
+    Merge branch 'marc/197-remove-boost-algorithm-string-hpp-from-client' into 'master'
+
+    Resolve "Remove boost/algorithm/string.hpp from client"
+
+    Closes #197
+
+    See merge request hpc/gekkofs!123
+---
+
+To enable GekkoFS to use the 'ofi+tcp' provider of the system-provided
+libfabric, the source code changes in the 'gekkofs_ofi_tcp.diff' file (which
+contains the output of `git diff`) were applied before building.
+
+The build commands that we used are in the 'gekkofs-build-crusher.sh' file.
+The build assumes the appropriate system modules have been loaded by sourcing
+the 'crusher/load-modules-gcc11-crusher.sh' file, and the Spack environment
+for the margo/mercury/argobots dependencies (see the 'crusher/spack-env' 
+directory) has been previously installed.
+

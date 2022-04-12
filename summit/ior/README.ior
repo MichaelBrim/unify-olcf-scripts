@@ -1,0 +1,12 @@
+The source code for IOR was cloned from the public repo at
+https://github.com/MichaelBrim/ior. We used the 'unifyfs-support' branch
+that adds UnifyFS build support onto v3.3.0 of IOR (i.e., 
+`git checkout unifyfs-support`).
+
+The build commands used are found in the 'ior-build-gpfs-summit.sh' and
+'ior-build-unifyfs-summit.sh' files. The build process assumes the
+appropriate system modules have been loaded by sourcing the
+the 'summit/load-modules-summit.sh' file.
+The build with UnifyFS support requires an existing installation of UnifyFS.
+
+
